@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0703">
+<title>Toppliste – Flåklypa Grand Prix</title>
+<style>
+  /* Shared leaderboard for every device playing the browser build on this
+     network. Served by tools/web/serve.py, which also stores the scores
+     (GET /api/scores). Styled like the game's start screen. */
+  :root { color-scheme: dark; --brass: #c4984a; --gold: #e8b84a; --text: #e9dcc0; --muted: #a8946c; }
+  * { box-sizing: border-box; }
+  html { background: #0b0703; }
+  body {
+    margin: 0; min-height: 100dvh; color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, sans-serif;
+    background: radial-gradient(ellipse at top, #2a1c0e 0%, #0b0703 65%) fixed;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  }
+  header { text-align: center; margin: 8px auto 20px; max-width: 980px; }
+  .game-name { margin: 0; color: var(--muted); font: italic 600 15px/1.2 Georgia, 'Times New Roman', serif; }
+  h1 {
+    margin: 4px 0 6px; font: italic 700 32px/1.1 Georgia, 'Times New Roman', serif;
+    color: #f0c75e; text-shadow: 0 2px 0 #5a3a10, 0 0 18px rgba(240, 199, 94, .25);
+  }
+  .meta { color: var(--muted); font-size: 13px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .meta a { color: var(--gold); }
+  main {
+    display: grid; gap: 14px; max-width: 980px; margin: 0 auto;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr));
+  }
+  section {
+    border: 1px solid var(--brass); border-radius: 6px; padding: 12px 14px 10px;
+    background: linear-gradient(180deg, rgba(58, 38, 16, .85), rgba(24, 16, 8, .92));
+    box-shadow: inset 0 1px 0 rgba(255, 220, 150, .12), 0 6px 18px rgba(0, 0, 0, .45);
+  }
+  h2 { margin: 0 0 8px; font: italic 700 19px/1.2 Georgia, 'Times New Roman', serif; color: var(--gold); }
+  ol { margin: 0; padding: 0; list-style: none; counter-reset: rank; }
+  li {
+    counter-increment: rank; display: grid; align-items: baseline; gap: 8px;
+    grid-template-columns: 1.6em minmax(0, 1fr) auto; padding: 4px 0;
+    border-top: 1px solid rgba(196, 152, 74, .18);
+  }
+  li:first-child { border-top: 0; }
+  li::before { content: counter(rank) "."; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  li:first-child::before { content: "★"; color: var(--gold); }
+  .player { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player small { display: block; color: var(--muted); font-size: 11px; }
+  .score { font-weight: 650; color: #fff4d6; font-variant-numeric: tabular-nums; }
+  .empty { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 40px 0; }
+  .empty strong { display: block; color: var(--text); font: italic 600 20px Georgia, serif; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <p class="game-name">Flåklypa Grand Prix</p>
+  <h1>Toppliste</h1>
+  <div class="meta">
+    <span id="updated">Henter …</span>
+    <a href="FGPNativePOC.html">Til spillet</a>
+  </div>
+</header>
+<main id="board"></main>
+<script>
+  const board = document.getElementById('board');
+  const updated = document.getElementById('updated');
+  const dateFormat = new Intl.DateTimeFormat('nb-NO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const numberFormat = new Intl.NumberFormat('nb-NO');
+
+  const element = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+
+  function render(data) {
+    const games = Object.entries((data && data.games) || {})
+      .filter(([, game]) => game.entries && game.entries.length)
+      .sort(([, a], [, b]) => a.title.localeCompare(b.title, 'nb'));
+    board.replaceChildren();
+    if (!games.length) {
+      const empty = element('div', 'empty');
+      empty.append(element('strong', '', 'Ingen poeng ennå'), 'Fullfør et spill, så dukker poengene opp her.');
+      board.append(empty);
+      return;
+    }
+    for (const [, game] of games) {
+      const card = element('section');
+      card.append(element('h2', '', game.title));
+      const list = element('ol');
+      for (const entry of game.entries.slice(0, 10)) {
+        const row = element('li');
+        const player = element('span', 'player', entry.player);
+        const when = new Date(entry.date);
+        if (!Number.isNaN(when.getTime())) player.append(element('small', '', dateFormat.format(when)));
+        row.append(player, element('span', 'score', numberFormat.format(entry.score)));
+        list.append(row);
+      }
+      card.append(list);
+      board.append(card);
+    }
+  }
+
+  async function refresh() {
+    try {
+      const response = await fetch('api/scores', { cache: 'no-store' });
+      if (!response.ok) throw new Error(response.status);
+      render(await response.json());
+      updated.textContent = 'Oppdatert ' + new Date().toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (error) {
+      updated.textContent = 'Får ikke kontakt med serveren';
+    }
+  }
+  refresh();
+  setInterval(refresh, 15000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+</script>
+</body>
+</html>

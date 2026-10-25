@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Merged by the linker into the manifest MSVC generates (which carries the
+  asInvoker trustInfo). See CMakeLists.txt and
+  docs/notes/windows-readiness-audit.md, D3 and R5.
+
+  activeCodePage UTF-8 (Windows 10 1903 and later) makes the process code page
+  UTF-8, so every narrow string the game hands to the C runtime, std::filesystem,
+  SDL or FFmpeg is read as the UTF-8 the rest of the code already assumes. The
+  original installs to a directory with a non-ASCII letter in its name, and
+  such paths then behave as they do on macOS and Linux. Older Windows ignores
+  the element. (This file is kept ASCII for the manifest tool.)
+
+  longPathAware lets paths past MAX_PATH work where the machine has
+  LongPathsEnabled set; both halves are needed.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

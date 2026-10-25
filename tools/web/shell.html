@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>Flåklypa Grand Prix</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    font: 16px/1.4 system-ui, -apple-system, sans-serif; color: #ddd;
+  }
+  /* The game renders 4:3; fit it to the screen without cropping. SDL sets
+     inline sizes on the canvas, hence !important. */
+  #canvas {
+    position: absolute; inset: 0; margin: auto; display: block;
+    width: min(100vw, calc(100dvh * 4 / 3)) !important;
+    height: min(100dvh, calc(100vw * 3 / 4)) !important;
+    background: #000; outline: none;
+  }
+  /* While the phone's keyboard is open the page moves (and if need be shrinks)
+     the game so its text field stays in view; the numbers come from the
+     script below. */
+  #canvas.lifted {
+    position: fixed; inset: auto; margin: 0;
+    left: var(--lift-left) !important; top: var(--lift-top) !important;
+    width: var(--lift-width) !important; height: var(--lift-height) !important;
+  }
+  #overlay {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: safe center; gap: 14px; text-align: center;
+    background: radial-gradient(ellipse at center, #2a1c0e 0%, #0b0703 70%);
+    padding: 16px; overflow-y: auto; touch-action: pan-y;
+  }
+  #overlay h1 {
+    margin: 0; font: italic 700 28px/1.1 Georgia, 'Times New Roman', serif;
+    color: #f0c75e; text-shadow: 0 2px 0 #5a3a10, 0 0 18px rgba(240, 199, 94, .25);
+  }
+  #status { min-height: 1.4em; color: #c9b48a; font-size: 14px; }
+  /* Same brass bar the game draws while a scene loads. */
+  #bar {
+    width: min(264px, 70vw); height: 12px; box-sizing: border-box;
+    border: 1px solid #c4984a; background: rgba(30, 20, 10, .9); padding: 2px;
+  }
+  #fill { height: 100%; width: 0; background: #e8b84a; transition: width .15s linear; }
+  #choose, #choose-discs, #choose-exe, #start {
+    font: inherit; font-size: 18px; padding: 12px 28px; border-radius: 999px;
+    border: 1px solid #c4984a; background: #e8b84a; color: #1a1205; font-weight: 600;
+  }
+  #choose[disabled], #choose-discs[disabled], #choose-exe[disabled], #start[disabled] { opacity: .35; }
+  #disc-controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  #disc-selection { font-size: 13px; max-width: 32em; overflow-wrap: anywhere; }
+  #datanote {
+    max-width: 30em; margin: 0; padding: 10px 14px; border-radius: 10px;
+    border: 1px solid rgba(196, 152, 74, .5); background: rgba(30, 20, 10, .6);
+    color: #c9b48a; font-size: 13px; line-height: 1.45; text-align: left;
+  }
+  #datanote[hidden] { display: none; }
+  #datanote strong { color: #f0c75e; font-weight: 600; }
+  #leaderboard { color: #c9b48a; font-size: 14px; text-underline-offset: 3px; }
+  /* Touch controls: shown only on touch screens once the game runs. */
+  #controls[hidden], #keys[hidden] { display: none; }
+  #controls button {
+    position: fixed; z-index: 2; width: 52px; height: 52px; border-radius: 50%;
+    border: 1px solid #c4984a; background: rgba(30, 20, 10, .72); color: #f0c75e;
+    font: 600 22px/1 Georgia, serif; display: flex; align-items: center; justify-content: center;
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  }
+  #controls button:active, #controls .held { background: rgba(232, 184, 74, .85) !important; color: #1a1205 !important; }
+  /* Keys the scene reads (src/game/touch_controls.h): a d-pad on the left,
+     action keys on the right, held for as long as a finger is on them. */
+  #pad, #actions { position: fixed; z-index: 2; touch-action: none; }
+  #pad[hidden], #actions[hidden], #pad [hidden] { display: none !important; }
+  /* Sized to the black margin beside (landscape) or below (portrait) the
+     game where there is room, so the controls cover as little of it as they can. */
+  #controls {
+    --side-gap: calc((100vw - 100dvh * 4 / 3) / 2);
+    --bottom-gap: calc((100dvh - 100vw * 3 / 4) / 2);
+    --pad: clamp(120px, max(var(--side-gap), var(--bottom-gap)) - 24px, 156px);
+  }
+  #pad {
+    left: max(16px, env(safe-area-inset-left)); bottom: max(16px, env(safe-area-inset-bottom));
+    width: var(--pad); height: var(--pad); border-radius: 50%;
+    background: radial-gradient(circle, rgba(30, 20, 10, .35) 0 40%, rgba(30, 20, 10, .55) 70%);
+    border: 1px solid rgba(196, 152, 74, .45);
+  }
+  #pad span {
+    position: absolute; width: 33.4%; height: 33.4%; box-sizing: border-box; border-radius: 14px;
+    border: 1px solid #c4984a; background: rgba(30, 20, 10, .72); color: #f0c75e;
+    font: 600 20px/1 Georgia, serif; display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+  }
+  #pad .up { left: 33.3%; top: 0; }
+  #pad .down { left: 33.3%; bottom: 0; }
+  #pad .left { left: 0; top: 33.3%; }
+  #pad .right { right: 0; top: 33.3%; }
+  #actions {
+    right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom));
+    display: flex; flex-direction: row-reverse; flex-wrap: wrap-reverse; align-items: flex-end;
+    justify-content: flex-start; gap: 12px; max-width: min(236px, 100vw - var(--pad) - 44px);
+  }
+  @media (orientation: landscape) {
+    #actions { max-width: max(76px, var(--side-gap) - 16px); }
+  }
+  #actions button {
+    position: static !important; min-width: 60px; height: 60px !important; width: auto !important;
+    padding: 0 14px; border-radius: 30px !important; font: 600 16px/1 system-ui, -apple-system, sans-serif !important;
+  }
+  /* Off-screen field that brings up the phone's keyboard for name entry. */
+  /* Kept in view (but invisible) so focusing it does not scroll the page. */
+  #typing { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; font-size: 16px; pointer-events: none; }
+  /* Feedback when a long press becomes a right click. */
+  .press-ring {
+    position: fixed; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%;
+    border: 2px solid #f0c75e; pointer-events: none; z-index: 3; animation: ring .35s ease-out forwards;
+  }
+  @keyframes ring { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.2); opacity: 0; } }
+</style>
+</head>
+<body>
+<canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+<div id="controls" hidden>
+  <button id="back" type="button" aria-label="Tilbake">&#x2039;</button>
+  <button id="keys" type="button" aria-label="Skriv med tastaturet" hidden>Skriv</button>
+  <div id="pad" hidden aria-hidden="true">
+    <span class="up">&#x25B2;</span><span class="left">&#x25C0;</span>
+    <span class="right">&#x25B6;</span><span class="down">&#x25BC;</span>
+  </div>
+  <div id="actions" hidden></div>
+</div>
+<input id="typing" type="text" autocomplete="off" autocorrect="off" autocapitalize="words"
+       spellcheck="false" enterkeyhint="done" aria-hidden="true" tabindex="-1">
+<div id="overlay">
+  <h1>Flåklypa Grand Prix</h1>
+  <div id="bar"><div id="fill"></div></div>
+  <div id="status" role="status" aria-live="polite">Laster spillmotoren …</div>
+  <p id="datanote"><strong>Bruk dine egne spillfiler.</strong> Velg begge CD-bildene fra
+    Flåklypa Grand Prix Gullutgave (ISO eller BIN), og deretter FGP.exe fra oppdatering 1.2.
+    Du kan også velge en installert spillmappe med versjon 1.2 (FGP.exe, Data og Language).
+    Filene leses bare på enheten din og lastes aldri opp. Velg filene igjen ved neste besøk;
+    lagrede spill beholdes i denne nettleseren. Spillernavn og poeng sendes til den felles topplisten når du spiller.</p>
+  <input id="game-folder" type="file" webkitdirectory multiple hidden>
+  <input id="disc-images" type="file" accept=".iso,.bin" multiple hidden>
+  <input id="game-executable" type="file" accept=".exe" hidden>
+  <div id="disc-controls">
+    <button id="choose-discs" disabled>1. Velg begge CD-bildene</button>
+    <button id="choose-exe" disabled>2. Velg FGP.exe (1.2)</button>
+  </div>
+  <div id="disc-selection" role="status"></div>
+  <button id="choose" disabled>Eller velg spillmappe</button>
+  <button id="start" disabled>Trykk for å starte</button>
+  <a id="leaderboard" href="leaderboard.html">Toppliste</a>
+</div>
+<script src="local-files.js"></script>
+<script>
+  const overlay = document.getElementById('overlay');
+  const status = document.getElementById('status');
+  const fill = document.getElementById('fill');
+  const start = document.getElementById('start');
+  const choose = document.getElementById('choose');
+  const picker = document.getElementById('game-folder');
+  const chooseDiscs = document.getElementById('choose-discs');
+  const chooseExe = document.getElementById('choose-exe');
+  const discPicker = document.getElementById('disc-images');
+  const exePicker = document.getElementById('game-executable');
+  const discSelection = document.getElementById('disc-selection');
+  let selectedDiscs = [];
+  let runtimeReady = false;
+  let imported = false;
+  let importing = false;
+  let localPackages = new Map();
+  let mountedPaths = [];
+  const enableStart = () => {
+    start.disabled = !runtimeReady || !imported || importing;
+    choose.disabled = !runtimeReady || importing;
+    chooseDiscs.disabled = !runtimeReady || importing;
+    chooseExe.disabled = !runtimeReady || importing || selectedDiscs.length !== 2;
+  };
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    noInitialRun: true,
+    print: (text) => console.log(text),
+    printErr: (text) => console.warn(text),
+    setStatus: () => {},
+    onAbort: () => { status.textContent = 'Spillmotoren kunne ikke lastes. Last siden på nytt for å prøve igjen.'; },
+    onRuntimeInitialized: () => {
+      const ready = () => {
+        runtimeReady = true;
+        status.textContent = 'Velg CD-bilder eller spillmappe for å fortsette.';
+        enableStart();
+      };
+      try {
+        const path = '/src/data/game/Profiles';
+        FS.mkdirTree(path);
+        FS.mount(FS.filesystems.IDBFS, {}, path);
+        FS.syncfs(true, (error) => {
+          if (error) console.warn('profiles could not be restored', error);
+          ready();
+        });
+      } catch (error) {
+        console.warn('profiles will not be kept between visits', error);
+        ready();
+      }
+    },
+    fgpTextEntry: (wanted, field) => setTextEntry(wanted, field),
+    fgpReadLocal: (path, offset, size) => FGPLocalFiles.readRange(localPackages, path, offset, size),
+  };
+  const indexLocalFiles = (request) => new Promise((resolve, reject) => {
+    const worker = new Worker('local-files-worker.js');
+    worker.onmessage = ({ data }) => {
+      if (data.error) { worker.terminate(); reject(new Error(data.error)); }
+      else if (data.packages) { worker.terminate(); resolve(data); }
+      else {
+        fill.style.width = (100 * data.done / data.total).toFixed(1) + '%';
+        status.textContent = `Leser lokale spillfiler … ${data.done}/${data.total}`;
+      }
+    };
+    worker.onerror = () => { worker.terminate(); reject(new Error('Kunne ikke lese spillmappen. Prøv igjen i en oppdatert nettleser.')); };
+    worker.postMessage(request);
+  });
+  const indexInstallation = packages => indexLocalFiles({ packages: Array.from(packages) }).then(result => result.packages);
+  const importSelection = async (select) => {
+    if (importing) return;
+    importing = true;
+    imported = false;
+    enableStart();
+    fill.style.width = '0%';
+    try {
+      const installation = select();
+      status.textContent = 'Kontrollerer FGP.exe lokalt …';
+      const executable = await FGPLocalFiles.validateExecutable(installation.executable);
+      const { packages, loose } = await indexLocalFiles(installation.discs
+        ? { discs: installation.discs } : { packages: Array.from(installation.packages) });
+      // Commit only after validation. Profile storage is never replaced.
+      for (const path of mountedPaths) FS.unlink(path);
+      mountedPaths = [];
+      localPackages = new Map();
+      const write = (relative, bytes) => {
+        const path = FGPLocalFiles.MOUNT + relative;
+        FS.mkdirTree(path.slice(0, path.lastIndexOf('/')));
+        FS.writeFile(path, bytes);
+        mountedPaths.push(path);
+      };
+      write('FGP.exe', executable);
+      for (const item of loose) write(item.path, item.bytes);
+      for (const item of packages) {
+        write(item.path, new Uint8Array());
+        write(item.path + '.idx', item.index);
+        localPackages.set(item.path, item.file);
+      }
+      // Exercise the synchronous local reader before offering Start.
+      FGPLocalFiles.readRange(localPackages, 'Data/menu.bin', 0, 12);
+      imported = true;
+      fill.style.width = '100%';
+      status.textContent = 'Spillfilene er klare. Ingen spillfiler er lastet opp.';
+      choose.textContent = 'Velg en annen spillmappe';
+    } catch (error) {
+      status.textContent = error.message;
+      fill.style.width = '0%';
+    } finally {
+      importing = false;
+      picker.value = ''; // The map retains only the game packages.
+      exePicker.value = '';
+      enableStart();
+    }
+  };
+  choose.addEventListener('click', () => { picker.value = ''; picker.click(); });
+  picker.addEventListener('change', () => {
+    if (!picker.files.length || importing) return;
+    selectedDiscs = [];
+    discSelection.textContent = '';
+    importSelection(() => FGPLocalFiles.select(picker.files));
+  });
+  chooseDiscs.addEventListener('click', () => { discPicker.value = ''; discPicker.click(); });
+  discPicker.addEventListener('change', () => {
+    if (!discPicker.files.length || importing) return;
+    imported = false;
+    selectedDiscs = Array.from(discPicker.files);
+    fill.style.width = '0%';
+    discSelection.textContent = selectedDiscs.map(file => file.name).join(' + ');
+    status.textContent = selectedDiscs.length === 2
+      ? 'CD-bilder valgt. Velg nå FGP.exe fra oppdatering 1.2.'
+      : 'Velg begge CD-bildene samtidig (ISO eller BIN).';
+    discPicker.value = '';
+    enableStart();
+  });
+  chooseExe.addEventListener('click', () => { exePicker.value = ''; exePicker.click(); });
+  exePicker.addEventListener('change', () => {
+    if (!exePicker.files.length || importing || selectedDiscs.length !== 2) return;
+    importSelection(() => ({ executable: exePicker.files[0], discs: selectedDiscs }));
+  });
+
+  // ---- Developer switches (testing) ----------------------------------------
+  // ?dev=1&view=<scene>&cmd=<command>&cmd=... starts the game in development
+  // mode, directly in a scene, running the given --dev-command steps;
+  // &dialog=name opens a dialog on top (FGP_START_DIALOG), and &touch=1 shows
+  // the touch controls on any screen.
+  const query = new URLSearchParams(location.search);
+  const developerArguments = () => (query.get('dev') === '1'
+    ? query.getAll('cmd').map((command) => '--dev-command=' + command) : []);
+  // The environment is read once while the runtime starts, so set it first.
+  Module.preRun = [() => {
+    if (query.get('dev') !== '1') return;
+    Module.ENV.FGP_DEV_MODE = '1';
+    if (query.get('view')) Module.ENV.FGP_START_VIEW = query.get('view');
+    if (query.get('dialog')) Module.ENV.FGP_START_DIALOG = query.get('dialog');
+  }];
+
+  // ---- Shared leaderboard -------------------------------------------------
+  // The game's high-score dialog shows these on its Global tab
+  // (src/platform/leaderboard.cpp asks for them through fgpLeaderboardRows).
+  let leaderboard = null;
+  const refreshLeaderboard = () => fetch('api/scores', { cache: 'no-store' })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((data) => { if (data) leaderboard = data; })
+    .catch(() => {});
+  refreshLeaderboard();
+  setInterval(refreshLeaderboard, 30000);
+  Module.fgpRefreshLeaderboard = refreshLeaderboard;
+  Module.fgpLeaderboardRows = (scene) => {
+    const game = leaderboard && leaderboard.games && leaderboard.games[scene];
+    if (!game) return '';
+    return [...game.entries].sort((a, b) => b.score - a.score).slice(0, 10)
+      .map((entry) => [String(entry.player).replace(/[\t\n]/g, ' '), entry.score, entry.date].join('\t'))
+      .join('\n');
+  };
+
+  // ---- Audio on phones ---------------------------------------------------
+  // Browsers only start audio from a gesture, so the game starts from the tap.
+  // iOS also routes Web Audio through the ringer: with the silent switch on it
+  // stays mute unless the page declares itself a player (Safari 17+), or, on
+  // older iOS, plays an <audio> element first. Later taps resume a suspended
+  // audio context (after a call, or when the page was in the background).
+  const unlockAudio = () => {
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (error) {}
+    try {
+      const silence = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+      silence.setAttribute('playsinline', '');
+      silence.play().catch(() => {});
+    } catch (error) {}
+  };
+  const resumeAudio = () => {
+    const sdl = Module.SDL2 || (typeof SDL2 !== 'undefined' ? SDL2 : null);
+    const context = sdl && sdl.audioContext;
+    if (context && context.state !== 'running') context.resume().catch(() => {});
+  };
+  for (const type of ['pointerdown', 'touchend', 'keydown']) {
+    window.addEventListener(type, resumeAudio, { passive: true });
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) resumeAudio(); });
+
+  // ---- Saving profiles ---------------------------------------------------
+  let syncing = false;
+  const saveProfiles = () => {
+    if (syncing || typeof FS === 'undefined' || !runtimeReady) return;
+    syncing = true;
+    FS.syncfs(false, (error) => {
+      syncing = false;
+      if (error) console.warn('profiles could not be saved', error);
+    });
+  };
+  setInterval(saveProfiles, 4000);
+  window.addEventListener('pagehide', saveProfiles);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) saveProfiles(); });
+
+  // ---- Keys for the game ---------------------------------------------------
+  // SDL reads keyCode and charCode, which synthetic events leave at 0.
+  const sendKey = (type, key, code, keyCode, charCode = 0, extra = {}) => {
+    const event = new KeyboardEvent(type, { key, code, bubbles: true, cancelable: true, ...extra });
+    for (const [name, value] of Object.entries({ keyCode, which: keyCode || charCode, charCode })) {
+      Object.defineProperty(event, name, { get: () => value });
+    }
+    window.dispatchEvent(event);
+  };
+  const pressKey = (key, code, keyCode) => {
+    sendKey('keydown', key, code, keyCode);
+    sendKey('keyup', key, code, keyCode);
+  };
+
+  // ---- Touch: tap = click, drag = drag, long press = right click ----------
+  // SDL's own touch handling only ever presses the left button, so touches on
+  // the canvas are translated here instead and SDL sees ordinary mouse input.
+  const isTouchScreen = matchMedia('(pointer: coarse)').matches;
+  const canvas = document.getElementById('canvas');
+  const LONG_PRESS_MS = 450;
+  const MOVE_SLOP = 10;
+  let touch = null;
+  const sendMouse = (type, x, y, button) => {
+    canvas.dispatchEvent(new MouseEvent(type, {
+      clientX: x, clientY: y, button, buttons: type === 'mouseup' ? 0 : (button === 2 ? 2 : 1),
+      bubbles: true, cancelable: true, view: window,
+    }));
+  };
+  const ring = (x, y) => {
+    const element = document.createElement('div');
+    element.className = 'press-ring';
+    element.style.left = x + 'px';
+    element.style.top = y + 'px';
+    document.body.appendChild(element);
+    setTimeout(() => element.remove(), 400);
+  };
+  const onTouch = (event) => {
+    if (event.target !== canvas) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const point = event.changedTouches[0];
+    if (event.type === 'touchstart') {
+      if (touch) return; // one finger at a time
+      touch = { id: point.identifier, x: point.clientX, y: point.clientY, dragging: false, done: false };
+      sendMouse('mousemove', touch.x, touch.y, 0);
+      touch.timer = setTimeout(() => {
+        if (!touch || touch.dragging) return;
+        touch.done = true;
+        ring(touch.x, touch.y);
+        sendMouse('mousedown', touch.x, touch.y, 2);
+        sendMouse('mouseup', touch.x, touch.y, 2);
+      }, LONG_PRESS_MS);
+      return;
+    }
+    if (!touch || point.identifier !== touch.id) return;
+    const x = point.clientX, y = point.clientY;
+    if (event.type === 'touchmove') {
+      if (touch.done) return;
+      if (!touch.dragging && Math.hypot(x - touch.x, y - touch.y) > MOVE_SLOP) {
+        touch.dragging = true;
+        clearTimeout(touch.timer);
+        sendMouse('mousedown', touch.x, touch.y, 0);
+      }
+      if (touch.dragging) sendMouse('mousemove', x, y, 0);
+      return;
+    }
+    clearTimeout(touch.timer); // touchend / touchcancel
+    if (!touch.done) {
+      if (touch.dragging) {
+        sendMouse('mouseup', x, y, 0);
+      } else if (event.type === 'touchend') {
+        sendMouse('mousedown', touch.x, touch.y, 0);
+        sendMouse('mouseup', touch.x, touch.y, 0);
+        // A tap is a gesture, so the phone allows opening its keyboard here.
+        if (textWanted) openKeyboard();
+      }
+    }
+    touch = null;
+  };
+  for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+    window.addEventListener(type, onTouch, { capture: true, passive: false });
+  }
+
+  // ---- Buttons: back (Esc) and keyboard -------------------------------------
+  const controls = document.getElementById('controls');
+  const keys = document.getElementById('keys');
+  const typing = document.getElementById('typing');
+  // Back is not Escape: in a scene it does what the exit control does (the
+  // original's Escape only acts in a few scenes); over a dialog, the menu or
+  // Options the game treats it as Escape.
+  document.getElementById('back').addEventListener('click', () => {
+    typing.blur();
+    if (Module._fgp_back_pressed) Module._fgp_back_pressed();
+    else pressKey('Escape', 'Escape', 27);
+  });
+  let textWanted = false;
+  let textField = null;
+  let sent = [];
+  function setTextEntry(wanted, field) {
+    const changed = wanted !== textWanted;
+    textWanted = wanted;
+    textField = wanted ? field || null : null;
+    keys.hidden = !wanted;
+    keys.classList.toggle('wanted', wanted);
+    if (changed) { typing.value = ''; sent = []; }
+    if (!wanted) typing.blur();
+    updateTouchControls();
+    layoutForKeyboard();
+  }
+  function openKeyboard() {
+    if (document.activeElement !== typing) { typing.value = ''; sent = []; }
+    // Android keeps the field focused when its keyboard is swiped away, and
+    // focusing it again would not bring the keyboard back.
+    else typing.blur();
+    typing.focus();
+  }
+  // The keyboard only opens from a tap, so the button focuses the field.
+  keys.addEventListener('click', openKeyboard);
+  // Phones edit the field in many ways (whole-word suggestions, autocorrect,
+  // composition on Android), so compare it with what the game already has
+  // and send only the difference: backspaces, then the new characters.
+  typing.addEventListener('input', () => {
+    const now = Array.from(typing.value);
+    let common = 0;
+    while (common < sent.length && common < now.length && sent[common] === now[common]) common++;
+    for (let index = sent.length; index > common; index--) pressKey('Backspace', 'Backspace', 8);
+    for (const character of now.slice(common)) {
+      sendKey('keypress', character, '', 0, character.codePointAt(0));
+    }
+    sent = now;
+  });
+  typing.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); pressKey('Enter', 'Enter', 13); typing.blur(); }
+    if (event.key === 'Escape') { event.preventDefault(); pressKey('Escape', 'Escape', 27); }
+  });
+
+  // ---- Keeping the text field above the phone's keyboard ---------------------
+  // The keyboard covers the bottom of the screen without resizing the page
+  // (iOS Safari, and Android Chrome since 108); window.visualViewport is the
+  // part still visible. While the keyboard is up, the game moves within it so
+  // the field it is typing into (Module.fgpTextEntry's rectangle, in the
+  // game's 800x600 coordinates) is in view, and shrinks only if the field
+  // would not fit; when the keyboard closes the usual layout comes back.
+  const LIFT_MARGIN = 8;
+  function layoutForKeyboard() {
+    const view = window.visualViewport;
+    const page = document.documentElement;
+    const typingNow = textWanted && document.activeElement === typing && view;
+    let lift = null;
+    if (typingNow) {
+      const field = textField || { x: 0, y: 0, width: 800, height: 600 };
+      const pageWidth = page.clientWidth, pageHeight = page.clientHeight;
+      const normal = Math.min(pageWidth / 800, pageHeight / 600);
+      const visibleTop = view.offsetTop, visibleBottom = view.offsetTop + view.height;
+      const whole = field.width >= 800 && field.height >= 600;
+      let scale = Math.min(normal, view.width / 800);
+      if (whole) scale = Math.min(scale, view.height / 600);
+      else if (field.height * scale > view.height - 2 * LIFT_MARGIN) {
+        scale = Math.max(0, (view.height - 2 * LIFT_MARGIN) / field.height);
+      }
+      const width = 800 * scale, height = 600 * scale;
+      let top = (pageHeight - height) / 2;
+      if (top < visibleTop || top + height > visibleBottom) {
+        if (whole) {
+          top = visibleTop + (view.height - height) / 2;
+        } else {
+          const fieldBottom = top + (field.y + field.height) * scale;
+          if (fieldBottom > visibleBottom - LIFT_MARGIN) top -= fieldBottom - (visibleBottom - LIFT_MARGIN);
+          if (top + field.y * scale < visibleTop + LIFT_MARGIN) top = visibleTop + LIFT_MARGIN - field.y * scale;
+        }
+      }
+      const left = view.offsetLeft + (view.width - width) / 2;
+      const normalLeft = (pageWidth - 800 * normal) / 2, normalTop = (pageHeight - 600 * normal) / 2;
+      if (Math.abs(scale - normal) > 1e-3 || Math.abs(top - normalTop) > 0.5 || Math.abs(left - normalLeft) > 0.5) {
+        lift = { left, top, width, height };
+      }
+    }
+    canvas.classList.toggle('lifted', !!lift);
+    if (lift) {
+      for (const [name, value] of Object.entries(lift)) canvas.style.setProperty('--lift-' + name, value + 'px');
+    }
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', layoutForKeyboard);
+    window.visualViewport.addEventListener('scroll', layoutForKeyboard);
+  }
+  typing.addEventListener('focus', layoutForKeyboard);
+  typing.addEventListener('blur', () => {
+    layoutForKeyboard();
+    // iOS may have scrolled the page to show the field; put it back.
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+    if (!overlay.isConnected) focusGame();
+  });
+
+  // ---- Space ---------------------------------------------------------------
+  // The game reads keys from the whole window, and with SDL's text input on
+  // it lets Space's default action through (so names can have spaces). That
+  // default would press whichever button has focus, so the page's buttons
+  // never take focus, and Space never presses one; the canvas keeps focus.
+  const focusGame = () => {
+    if (document.activeElement !== typing) canvas.focus({ preventScroll: true });
+  };
+  for (const button of document.querySelectorAll('#controls button')) {
+    button.tabIndex = -1;
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+  }
+  const isSpace = (event) => event.code === 'Space' || event.key === ' ';
+  window.addEventListener('keydown', (event) => {
+    if (!isSpace(event) || event.target === typing || !event.isTrusted) return;
+    if (event.target instanceof HTMLButtonElement || event.target instanceof HTMLAnchorElement) {
+      if (overlay.isConnected) return; // the start page's own buttons
+      event.preventDefault();
+      focusGame();
+    }
+  }, true);
+  window.addEventListener('keyup', (event) => {
+    if (isSpace(event) && event.target !== typing && !overlay.isConnected) event.preventDefault();
+  }, true);
+
+  // ---- On-screen keys for scenes that read keys ------------------------------
+  // The game says which keys the current scene needs (Module.fgpTouchControls,
+  // from src/game/touch_controls.h). Each is sent as a real key down when a
+  // finger lands on it, repeated as a held keyboard key would be, and released
+  // when the finger lifts, so games that poll held keys (Mountain, Bugzzz,
+  // Balloon Hunt) play as they do on a keyboard.
+  const KEYS = {
+    ArrowUp: ['ArrowUp', 38], ArrowDown: ['ArrowDown', 40],
+    ArrowLeft: ['ArrowLeft', 37], ArrowRight: ['ArrowRight', 39],
+    Space: [' ', 32, 'Mellomrom'], Enter: ['Enter', 13, 'Enter'],
+    KeyA: ['a', 65, 'A'], KeyS: ['s', 83, 'S'], KeyJ: ['j', 74, 'J'], KeyK: ['k', 75, 'K'],
+    KeyZ: ['z', 90, 'Z'], ControlLeft: ['Control', 17, 'Ctrl'], ShiftLeft: ['Shift', 16, 'Shift'],
+    PageUp: ['PageUp', 33, 'PgUp'], PageDown: ['PageDown', 34, 'PgDn'],
+    NumpadMultiply: ['*', 106, '*'], NumpadSubtract: ['-', 109, '-'], NumpadDivide: ['/', 111, '/'],
+  };
+  const KEY_REPEAT_DELAY_MS = 500;
+  const KEY_REPEAT_MS = 33;
+  const heldKeys = new Map(); // code -> { count, timer }
+  const keyInit = (code) => (code.startsWith('Numpad') ? { location: 3 } : {});
+  const holdKey = (code) => {
+    const info = KEYS[code];
+    if (!info) return;
+    const held = heldKeys.get(code);
+    if (held) { held.count++; return; }
+    sendKey('keydown', info[0], code, info[1], 0, keyInit(code));
+    const entry = { count: 1, timer: 0 };
+    entry.timer = setTimeout(function repeat() {
+      sendKey('keydown', info[0], code, info[1], 0, { ...keyInit(code), repeat: true });
+      entry.timer = setTimeout(repeat, KEY_REPEAT_MS);
+    }, KEY_REPEAT_DELAY_MS);
+    heldKeys.set(code, entry);
+  };
+  const releaseKey = (code) => {
+    const held = heldKeys.get(code);
+    if (!held || --held.count > 0) return;
+    clearTimeout(held.timer);
+    heldKeys.delete(code);
+    sendKey('keyup', KEYS[code][0], code, KEYS[code][1], 0, keyInit(code));
+  };
+  const pad = document.getElementById('pad');
+  const actions = document.getElementById('actions');
+  const arms = { up: pad.querySelector('.up'), down: pad.querySelector('.down'),
+                 left: pad.querySelector('.left'), right: pad.querySelector('.right') };
+  let padKeys = {};       // arm -> code
+  let padFingers = new Map(); // pointerId -> Set of arms
+  let touchSpec = '';
+  const showTouchControls = isTouchScreen || query.get('touch') === '1';
+
+  const setArms = (pointerId, wanted) => {
+    const before = padFingers.get(pointerId) || new Set();
+    for (const arm of before) if (!wanted.has(arm)) releaseKey(padKeys[arm]);
+    for (const arm of wanted) if (!before.has(arm)) holdKey(padKeys[arm]);
+    if (wanted.size) padFingers.set(pointerId, wanted); else padFingers.delete(pointerId);
+    const active = new Set([...padFingers.values()].flatMap((arms) => [...arms]));
+    for (const [arm, element] of Object.entries(arms)) element.classList.toggle('held', active.has(arm));
+  };
+  // A finger on the pad works like a joystick: the direction from the
+  // centre picks the arms, diagonals included, and sliding changes them.
+  const padArmsAt = (event) => {
+    const box = pad.getBoundingClientRect();
+    const dx = event.clientX - (box.left + box.width / 2);
+    const dy = event.clientY - (box.top + box.height / 2);
+    const distance = Math.hypot(dx, dy);
+    const wanted = new Set();
+    if (distance < 14) return wanted;
+    // Within 67.5 degrees of an axis counts, so the 45-degree bands between
+    // them press both keys.
+    const share = 0.38 * distance;
+    const horizontal = padKeys.left || padKeys.right;
+    const vertical = padKeys.up || padKeys.down;
+    if ((dx < -share || (!vertical && dx < 0)) && padKeys.left) wanted.add('left');
+    if ((dx > share || (!vertical && dx > 0)) && padKeys.right) wanted.add('right');
+    if ((dy < -share || (!horizontal && dy < 0)) && padKeys.up) wanted.add('up');
+    if ((dy > share || (!horizontal && dy > 0)) && padKeys.down) wanted.add('down');
+    return wanted;
+  };
+  pad.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    try { pad.setPointerCapture(event.pointerId); } catch (error) {}
+    setArms(event.pointerId, padArmsAt(event));
+  });
+  pad.addEventListener('pointermove', (event) => {
+    if (padFingers.has(event.pointerId) || pad.hasPointerCapture(event.pointerId)) {
+      setArms(event.pointerId, padArmsAt(event));
+    }
+  });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    pad.addEventListener(type, (event) => setArms(event.pointerId, new Set()));
+  }
+  const releaseAll = () => {
+    for (const id of [...padFingers.keys()]) setArms(id, new Set());
+    for (const button of actions.querySelectorAll('.held')) button.dispatchEvent(new Event('release'));
+    for (const code of [...heldKeys.keys()]) { heldKeys.get(code).count = 1; releaseKey(code); }
+  };
+  // Fingers are captured by their key; these catch a release the capture
+  // missed, so no key is left held down.
+  const actionPointers = new Map(); // pointerId -> release
+  for (const type of ['pointerup', 'pointercancel']) {
+    window.addEventListener(type, (event) => {
+      if (padFingers.has(event.pointerId)) setArms(event.pointerId, new Set());
+      const release = actionPointers.get(event.pointerId);
+      if (release) release();
+    }, true);
+  }
+  const makeAction = (code, label) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.tabIndex = -1;
+    button.textContent = label;
+    button.setAttribute('aria-label', label);
+    let pointer = null;
+    const release = () => {
+      if (pointer === null) return;
+      actionPointers.delete(pointer);
+      pointer = null;
+      button.classList.remove('held');
+      releaseKey(code);
+    };
+    button.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      if (pointer !== null) return;
+      pointer = event.pointerId;
+      actionPointers.set(pointer, release);
+      try { button.setPointerCapture(event.pointerId); } catch (error) {}
+      button.classList.add('held');
+      holdKey(code);
+    });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+      button.addEventListener(type, (event) => { if (event.pointerId === pointer) release(); });
+    }
+    button.addEventListener('release', release);
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('contextmenu', (event) => event.preventDefault());
+    return button;
+  };
+  const updateTouchControls = () => {
+    const wanted = showTouchControls && !textWanted ? touchSpec : '';
+    if (pad.dataset.spec === wanted) return;
+    releaseAll();
+    pad.dataset.spec = wanted;
+    padKeys = {};
+    actions.replaceChildren();
+    const names = { L: 'left', R: 'right', U: 'up', D: 'down' };
+    for (const item of wanted.split(' ').filter(Boolean)) {
+      const arm = /^([LRUD])=(\w+)$/.exec(item);
+      if (arm) { if (KEYS[arm[2]]) padKeys[names[arm[1]]] = arm[2]; continue; }
+      const [code, label] = item.split(':');
+      if (!KEYS[code]) continue;
+      actions.appendChild(makeAction(code, (label || KEYS[code][2] || code).replace(/_/g, ' ')));
+    }
+    for (const [arm, element] of Object.entries(arms)) element.hidden = !padKeys[arm];
+    pad.hidden = !Object.keys(padKeys).length;
+    actions.hidden = !actions.childElementCount;
+  };
+  Module.fgpTouchControls = (spec) => { touchSpec = spec; updateTouchControls(); };
+  window.addEventListener('blur', releaseAll);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+
+  start.addEventListener('click', () => {
+    if (!runtimeReady || !imported || importing || start.disabled) return;
+    start.disabled = true;
+    unlockAudio();
+    overlay.remove();
+    if (showTouchControls) controls.hidden = false;
+    focusGame();
+    try {
+      const result = Module.callMain(['/src/data/game', ...developerArguments()]);
+      if (result) throw new Error('Spillet kunne ikke starte. Kontroller at installasjonen er komplett.');
+    } catch (error) {
+      document.body.appendChild(overlay);
+      controls.hidden = true;
+      choose.disabled = true;
+      status.textContent = 'Kunne ikke starte spillet. Last siden på nytt og velg en komplett installasjon. ' + error.message;
+      return;
+    }
+    resumeAudio();
+  });
+  window.addEventListener('error', (event) => { status.textContent = 'Feil: ' + event.message; });
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>
